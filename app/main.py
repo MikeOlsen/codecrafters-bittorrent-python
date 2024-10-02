@@ -1,23 +1,35 @@
 import json
 import sys
+from typing import Any
 
 # import bencodepy - available if you need it!
 # import requests - available if you need it!
+
 
 # Examples:
 #
 # - decode_bencode(b"5:hello") -> b"hello"
 # - decode_bencode(b"10:hello12345") -> b"hello12345"
 def decode_bencode(bencoded_value):
+    return _decode_bencoded_segment(bencoded_value)[0]
+
+
+def _decode_bencoded_segment(bencoded_value) -> tuple[Any, bytes]:
     prefix = chr(bencoded_value[0])
-    suffix = chr(bencoded_value[-1])
     if prefix.isdigit():
-        first_colon_index = bencoded_value.find(b":")
-        if first_colon_index == -1:
-            raise ValueError("Invalid encoded value")
-        return bencoded_value[first_colon_index+1:]
-    elif prefix == "i" and suffix == "e":
-        return int(bencoded_value[1:-1])
+        length_b, content = bencoded_value.split(b":", 1)
+        length = int(length_b)
+        return str(content[:length], "utf-8"), content[length:]
+    elif prefix == "i":
+        integer_b, rest = bencoded_value[1:].split(b"e", 1)
+        return int(integer_b), rest
+    elif prefix == "l":
+        result = []
+        content = bencoded_value[1:]
+        while chr(content[0]) != "e":
+            res, content = _decode_bencoded_segment(content)
+            result.append(res)
+        return result, content[1:]
     else:
         raise NotImplementedError("Only strings and digits are supported at the moment")
 
