@@ -19,7 +19,7 @@ def _decode_bencoded_segment(bencoded_value) -> tuple[Any, bytes]:
     if prefix.isdigit():
         length_b, content = bencoded_value.split(b":", 1)
         length = int(length_b)
-        return str(content[:length], "utf-8"), content[length:]
+        return content[:length], content[length:]
     elif prefix == "i":
         integer_b, rest = bencoded_value[1:].split(b"e", 1)
         return int(integer_b), rest
@@ -36,7 +36,7 @@ def _decode_bencoded_segment(bencoded_value) -> tuple[Any, bytes]:
         while chr(data[0]) != "e":
             key, data = _decode_bencoded_segment(data)
             value, data = _decode_bencoded_segment(data)
-            result[key] = value
+            result[key.decode()] = value
         return result, data
 
     else:
@@ -60,6 +60,16 @@ def main():
             raise TypeError(f"Type not serializable: {type(data)}")
 
         print(json.dumps(decode_bencode(bencoded_value), default=bytes_to_str))
+
+    elif command == "info":
+        file = sys.argv[2]
+        with open(file, "rb") as f:
+            bencoded_content = f.read()
+
+            torrent = decode_bencode(bencoded_content)
+            print("Tracker URL:", torrent["announce"].decode())
+            print("Length:", torrent["info"]["length"])
+
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
