@@ -25,11 +25,20 @@ def _decode_bencoded_segment(bencoded_value) -> tuple[Any, bytes]:
         return int(integer_b), rest
     elif prefix == "l":
         result = []
-        content = bencoded_value[1:]
-        while chr(content[0]) != "e":
-            res, content = _decode_bencoded_segment(content)
-            result.append(res)
-        return result, content[1:]
+        data = bencoded_value[1:]
+        while chr(data[0]) != "e":
+            value, data = _decode_bencoded_segment(data)
+            result.append(value)
+        return result, data[1:]
+    elif prefix == "d":
+        result = {}
+        data = bencoded_value[1:]
+        while chr(data[0]) != "e":
+            key, data = _decode_bencoded_segment(data)
+            value, data = _decode_bencoded_segment(data)
+            result[key] = value
+        return result, data
+
     else:
         raise NotImplementedError("Only strings and digits are supported at the moment")
 
