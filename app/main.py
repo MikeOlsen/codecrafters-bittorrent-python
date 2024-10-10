@@ -1,6 +1,8 @@
 import json
+import urllib.parse
 import sys
 import hashlib
+import requests
 
 from app import bencode
 
@@ -20,6 +22,12 @@ def bytes_to_str(data):
     raise TypeError(f"Type not serializable: {type(data)}")
 
 
+def parse_torrent(bencoded_content: bytes) -> dict:
+    torrent: dict = bencode.decode(bencoded_content)
+    torrent["info_hash"] = hashlib.sha1(bencode.encode(torrent["info"])).digest()
+    return torrent
+
+
 def main():
     command = sys.argv[1]
 
@@ -36,24 +44,44 @@ def main():
     elif command == "info":
         file = sys.argv[2]
         with open(file, "rb") as f:
-            bencoded_content = f.read()
 
-            torrent: dict = bencode.decode(bencoded_content)
-            info_part = torrent["info"]
+            torrent = parse_torrent(f.read())
 
-            if isinstance(info_part, dict):
-                hash = hashlib.sha1(bencode.encode(info_part)).hexdigest()
+            # Stage: Calculate the hashes
+            print("Tracker URL:", torrent["announce"].decode())
+            print("Length:", torrent["info"]["length"])
+            print("Info Hash:", torrent["info_hash"].hex())
 
-                # Stage: Calculate the hashes
-                print("Tracker URL:", torrent["announce"].decode())
-                print("Length:", torrent["info"]["length"])
-                print("Info Hash:", hash)
+            # Stage: Piece hashes
+            print("Piece Length:", torrent["info"]["piece length"])
+            print("Piece Hashes:")
+            for i in range(0, len(torrent["info"]["pieces"]), 20):
+                print(torrent["info"]["pieces"][i : i + 20].hex())
 
-                # Stage: Piece hashes
-                print("Piece Length:", info_part["piece length"])
-                print("Piece Hashes:")
-                for i in range(0, len(info_part["pieces"]), 20):
-                    print(info_part["pieces"][i : i + 20].hex())
+    elif command == "peers":
+        file = sys.argv[2]
+        with open(file, "rb") as f:
+            torrent = parse_torrent(f.read())
+
+            tracker_url = torrent["announce"].decode()
+
+            params = {
+                "info_hash": torrent["info_hash"],
+                "peer_id": "codecrafter-12345678",
+                "port": 6881,
+                "uploaded": 0,
+                "downloaded": 0,
+                "left": torrent["info"]["length"],
+                "compact": 1,
+            }
+            response_b = requests.get(tracker_url, params)
+            response = bencode.decode(response_b.content)
+
+            peers = response["peers"]
+            for i in range(0, len(peers), 6):
+                ip = ".".join(str(byte) for byte in peers[i : i + 4])
+                port = int.from_bytes(peers[i + 4 : i + 6])
+                print(f"{ip}:{port}")
 
     else:
         raise NotImplementedError(f"Unknown command {command}")
