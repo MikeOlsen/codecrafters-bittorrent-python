@@ -1,10 +1,11 @@
 import json
-import urllib.parse
+import os
+import socket
 import sys
 import hashlib
 import requests
 
-from app import bencode
+from app import bencode, bittorrent
 
 # import requests - available if you need it!
 
@@ -82,6 +83,15 @@ def main():
                 ip = ".".join(str(byte) for byte in peers[i : i + 4])
                 port = int.from_bytes(peers[i + 4 : i + 6])
                 print(f"{ip}:{port}")
+
+    elif command == "handshake":
+        file = sys.argv[2]
+        ip, port = sys.argv[3].split(":", 1)
+
+        with open(file, "rb") as f:
+            torrent = parse_torrent(f.read())
+            peer_id = bittorrent.handshake(ip, int(port), torrent)
+            print("Peer ID:", peer_id)
 
     else:
         raise NotImplementedError(f"Unknown command {command}")
