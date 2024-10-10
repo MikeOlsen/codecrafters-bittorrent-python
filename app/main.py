@@ -1,8 +1,9 @@
 import json
 import sys
-from typing import Any
+import hashlib
 
-# import bencodepy - available if you need it!
+from app import bencode
+
 # import requests - available if you need it!
 
 
@@ -10,37 +11,13 @@ from typing import Any
 #
 # - decode_bencode(b"5:hello") -> b"hello"
 # - decode_bencode(b"10:hello12345") -> b"hello12345"
-def decode_bencode(bencoded_value):
-    return _decode_bencoded_segment(bencoded_value)[0]
 
 
-def _decode_bencoded_segment(bencoded_value) -> tuple[Any, bytes]:
-    prefix = chr(bencoded_value[0])
-    if prefix.isdigit():
-        length_b, content = bencoded_value.split(b":", 1)
-        length = int(length_b)
-        return content[:length], content[length:]
-    elif prefix == "i":
-        integer_b, rest = bencoded_value[1:].split(b"e", 1)
-        return int(integer_b), rest
-    elif prefix == "l":
-        result = []
-        data = bencoded_value[1:]
-        while chr(data[0]) != "e":
-            value, data = _decode_bencoded_segment(data)
-            result.append(value)
-        return result, data[1:]
-    elif prefix == "d":
-        result = {}
-        data = bencoded_value[1:]
-        while chr(data[0]) != "e":
-            key, data = _decode_bencoded_segment(data)
-            value, data = _decode_bencoded_segment(data)
-            result[key.decode()] = value
-        return result, data
+def bytes_to_str(data):
+    if isinstance(data, bytes):
+        return data.decode()
 
-    else:
-        raise NotImplementedError("Only strings and digits are supported at the moment")
+    raise TypeError(f"Type not serializable: {type(data)}")
 
 
 def main():
@@ -53,22 +30,23 @@ def main():
         # bytestrings since they might contain non utf-8 characters.
         #
         # Let's convert them to strings for printing to the console.
-        def bytes_to_str(data):
-            if isinstance(data, bytes):
-                return data.decode()
 
-            raise TypeError(f"Type not serializable: {type(data)}")
-
-        print(json.dumps(decode_bencode(bencoded_value), default=bytes_to_str))
+        print(json.dumps(bencode.decode(bencoded_value), default=bytes_to_str))
 
     elif command == "info":
         file = sys.argv[2]
         with open(file, "rb") as f:
             bencoded_content = f.read()
 
-            torrent = decode_bencode(bencoded_content)
-            print("Tracker URL:", torrent["announce"].decode())
-            print("Length:", torrent["info"]["length"])
+            torrent: dict = bencode.decode(bencoded_content)
+            info_part = torrent["info"]
+
+            if isinstance(info_part, dict):
+                hash = hashlib.sha1(bencode.encode(info_part)).hexdigest()
+
+                print("Tracker URL:", torrent["announce"].decode())
+                print("Length:", torrent["info"]["length"])
+                print("Info Hash:", hash)
 
     else:
         raise NotImplementedError(f"Unknown command {command}")
