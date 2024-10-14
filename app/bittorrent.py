@@ -1,7 +1,11 @@
 import hashlib
+from inspect import findsource
+import logging
 import os
-import socket
 import struct
+import asyncio
+from typing import final
+from tqdm.asyncio import tqdm
 
 from app.utils import (
     calculate_piece_length,
@@ -24,67 +28,77 @@ BITFIELD = 5
 REQUEST = 6
 PIECE = 7
 
+MAX_CONCURRENT_TASKS = 3
+semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
-class Bittorrent:
 
-    def __init__(self, sock=None):
-        if sock is None:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        else:
-            self.sock = sock
+class AsyncBittorrent:
 
-    def connect(self, host: str, port: int):
-        self.sock.connect((host, port))
+    def __init__(self):
+        self.reader = None
+        self.writer = None
 
-    def handshake(self, torrent):
+    async def connect(self, host: str, port: int):
+        self.reader, self.writer = await asyncio.open_connection(host, port)
+
+    async def handshake(self, torrent):
+        if not self.reader or not self.writer:
+            raise Exception("Not connected")
+
         self.torrent = torrent
         handshake = PROTOCOL_HEADER + RESERVED_BYTES + torrent["info_hash"] + PEER_ID
 
-        self.sock.send(handshake)
-        response = self.sock.recv(HANDSHAKE_LENGTH)[PEER_ID_INDEX:]
+        self.writer.write(handshake)
+        await self.writer.drain()
 
-        return response.hex()
+        response = await self.reader.read(HANDSHAKE_LENGTH)
+        return response[PEER_ID_INDEX:].hex()
 
-    def init_peer_communication(self):
-        self.wait_for_reply(BITFIELD)
-        self.send(INTERESTED)
-        self.wait_for_reply(UNCHOKE)
+    async def init_peer_communication(self):
+        await self.wait_for_reply(BITFIELD)
+        await self.send(INTERESTED)
+        await self.wait_for_reply(UNCHOKE)
 
-    def send(self, message_id: int, payload=b""):
+    async def send(self, message_id: int, payload=b""):
+        if not self.reader or not self.writer:
+            raise Exception("Not connected")
+
         length = len(payload) + 1
         message = struct.pack(">IB", length, message_id) + payload
-        self.sock.send(message)
+        self.writer.write(message)
+        await self.writer.drain()
 
-    def receive(self, length):
+    async def receive(self, length):
+        if not self.reader or not self.writer:
+            raise Exception("Not connected")
         chunks = []
         bytes_recd = 0
         while bytes_recd < length:
-            chunk = self.sock.recv(min(length - bytes_recd, 2048))
-            if not chunk:
-                raise RuntimeError("socket connection broken")
+            chunk = await self.reader.read(min(length - bytes_recd, 2048))
             chunks.append(chunk)
             bytes_recd += len(chunk)
         return b"".join(chunks)
 
-    def receive_message(self) -> tuple[int, bytes]:
-        header = self.receive(5)
+    async def receive_message(self) -> tuple[int, bytes]:
+        header = await self.receive(5)
         length, message_id = struct.unpack(">IB", header)
         payload_length = length - 1
 
-        payload = self.receive(payload_length) if payload_length > 0 else b""
+        payload = await self.receive(payload_length) if payload_length > 0 else b""
         return message_id, payload
 
-    def wait_for_reply(self, desired_message_id: int) -> bytes:
-        message_id, message = self.receive_message()
+    async def wait_for_reply(self, desired_message_id: int) -> bytes:
+        message_id, message = await self.receive_message()
         while message_id != desired_message_id:
-            message_id, message = self.receive_message()
+            message_id, message = await self.receive_message()
         return message
 
-    def download_block(self, index, begin, length):
-        self.send(REQUEST, struct.pack(">III", index, begin, length))
-        return self.wait_for_reply(PIECE)[8:]
+    async def download_block(self, index, begin, length):
+        await self.send(REQUEST, struct.pack(">III", index, begin, length))
+        reply = await self.wait_for_reply(PIECE)
+        return reply[8:]
 
-    def download_piece(self, torrent, piece_index):
+    async def download_piece(self, torrent, piece_index):
 
         piece_length = calculate_piece_length(torrent, piece_index)
         block_count = piece_length // BLOCK_LENGTH
@@ -92,13 +106,13 @@ class Bittorrent:
 
         data = b""
         for index in range(block_count):
-            data += self.download_block(
+            data += await self.download_block(
                 index=piece_index,
                 begin=index * BLOCK_LENGTH,
                 length=BLOCK_LENGTH,
             )
         if last_block_length > 0:
-            data += self.download_block(
+            data += await self.download_block(
                 index=piece_index,
                 begin=block_count * BLOCK_LENGTH,
                 length=last_block_length,
@@ -110,3 +124,32 @@ class Bittorrent:
             raise ConnectionError(f"Incorrect sha1 for piece {piece_index}")
 
         return data
+
+
+async def handshake(host: str, port: int, torrent):
+    bittorrent = AsyncBittorrent()
+    await bittorrent.connect(host, port)
+    return await bittorrent.handshake(torrent)
+
+
+async def download_piece_from_peer(peer, piece_index, torrent) -> bytes:
+    bittorrent = AsyncBittorrent()
+    async with semaphore:
+        await bittorrent.connect(*peer)
+        await bittorrent.handshake(torrent)
+        await bittorrent.init_peer_communication()
+
+        return await bittorrent.download_piece(torrent, piece_index)
+
+
+async def download_all_pieces(peers, torrent):
+    piece_hashes = get_piece_hashes(torrent)
+
+    tasks = []
+    for piece_index in range(0, len(piece_hashes)):
+        peer = peers[piece_index % len(peers)]
+        tasks.append(
+            asyncio.create_task(download_piece_from_peer(peer, piece_index, torrent))
+        )
+
+    return await tqdm.gather(*tasks, bar_format="{l_bar}{bar:50}{r_bar}")

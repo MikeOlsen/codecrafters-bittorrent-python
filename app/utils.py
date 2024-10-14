@@ -45,6 +45,9 @@ def get_tracker_info(torrent):
     return bencode.decode(response.content)
 
 
+""
+
+
 def calculate_piece_length(torrent, piece_index):
     piece_hashes = get_piece_hashes(torrent)
     if piece_index == len(piece_hashes) - 1:

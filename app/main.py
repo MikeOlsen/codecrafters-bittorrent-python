@@ -1,18 +1,11 @@
+import asyncio
 import json
 import sys
 
 from app import bencode
-from app.bittorrent import Bittorrent
+from app.bittorrent import download_all_pieces, download_piece_from_peer, handshake
 from app.utils import get_piece_hashes, get_tracker_info, parse_peers, parse_torrent
-
-
-# import requests - available if you need it!
-
-
-# Examples:
-#
-# - decode_bencode(b"5:hello") -> b"hello"
-# - decode_bencode(b"10:hello12345") -> b"hello12345"
+import logging
 
 
 def bytes_to_str(data):
@@ -27,11 +20,6 @@ def main():
 
     if command == "decode":
         bencoded_value = sys.argv[2].encode()
-
-        # json.dumps() can't handle bytes, but bencoded "strings" need to be
-        # bytestrings since they might contain non utf-8 characters.
-        #
-        # Let's convert them to strings for printing to the console.
 
         print(json.dumps(bencode.decode(bencoded_value), default=bytes_to_str))
 
@@ -66,9 +54,7 @@ def main():
 
         torrent = parse_torrent(file)
 
-        bittorrent = Bittorrent()
-        bittorrent.connect(ip, int(port))
-        peer_id = bittorrent.handshake(torrent)
+        peer_id = asyncio.run(handshake(ip, int(port), torrent))
         print("Peer ID:", peer_id)
 
     elif command == "download_piece":
@@ -81,16 +67,9 @@ def main():
         tracker = get_tracker_info(torrent)
         peers = parse_peers(tracker)
 
-        # Establish connection
-        bittorrent = Bittorrent()
-        bittorrent.connect(*peers[0])
-        bittorrent.handshake(torrent)
-        bittorrent.init_peer_communication()
+        data = asyncio.run(download_piece_from_peer(peers[1], piece_index, torrent))
 
-        # Download piece
-        data = bittorrent.download_piece(torrent, piece_index)
-
-        print(f"Piece {piece_index} successfully donloaded")
+        print(f"Piece {piece_index} successfully downloaded")
         # Write piece to file
         with open(target_file, "wb") as f:
             f.write(data)
@@ -104,21 +83,8 @@ def main():
         tracker = get_tracker_info(torrent)
         peers = parse_peers(tracker)
 
-        # Establish connection
-        bittorrent = Bittorrent()
-        bittorrent.connect(*peers[2])
-        bittorrent.handshake(torrent)
-        bittorrent.init_peer_communication()
+        pieces = asyncio.run(download_all_pieces(peers, torrent))
 
-        piece_hashes = get_piece_hashes(torrent)
-
-        print("Pieces to download:", len(piece_hashes))
-        pieces = []
-        for piece_index in range(0, len(piece_hashes)):
-            print("Downloading piece:", piece_index)
-            pieces.append(bittorrent.download_piece(torrent, piece_index))
-
-        # Write to file
         with open(target_file, "wb") as f:
             for piece in pieces:
                 f.write(piece)
@@ -128,4 +94,5 @@ def main():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     main()
