@@ -113,14 +113,14 @@ def main():
         piece_hashes = get_piece_hashes(torrent)
 
         print("Pieces to download:", len(piece_hashes))
-        data = []
+        pieces = []
         for piece_index in range(0, len(piece_hashes)):
             print("Downloading piece:", piece_index)
-            data.append(bittorrent.download_piece(torrent, piece_index))
+            pieces.append(bittorrent.download_piece(torrent, piece_index))
 
         # Write to file
         with open(target_file, "wb") as f:
-            for piece in data:
+            for piece in pieces:
                 f.write(piece)
 
     else:
