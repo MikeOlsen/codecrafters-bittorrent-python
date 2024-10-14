@@ -1,20 +1,10 @@
 import json
-import math
-import struct
 import sys
-import hashlib
-import requests
 
 from app import bencode
-from app.bittorrent import (
-    BITFIELD,
-    INTERESTED,
-    REQUEST,
-    UNCHOKE,
-    Bittorrent,
-)
+from app.bittorrent import Bittorrent
+from app.utils import get_piece_hashes, get_tracker_info, parse_peers, parse_torrent
 
-BLOCK_LENGTH = 16 * 1024
 
 # import requests - available if you need it!
 
@@ -30,58 +20,6 @@ def bytes_to_str(data):
         return data.decode()
 
     raise TypeError(f"Type not serializable: {type(data)}")
-
-
-def parse_torrent(file: str) -> dict:
-    with open(file, "rb") as f:
-        bencoded_content = f.read()
-        torrent: dict = bencode.decode(bencoded_content)
-        torrent["info_hash"] = hashlib.sha1(bencode.encode(torrent["info"])).digest()
-        return torrent
-
-
-def parse_peers(tracker):
-    peers = tracker["peers"]
-    result = []
-    for i in range(0, len(peers), 6):
-        ip = ".".join(str(byte) for byte in peers[i : i + 4])
-        port = int.from_bytes(peers[i + 4 : i + 6])
-        result.append((ip, port))
-    return result
-
-
-def get_piece_hashes(torrent):
-    hashes = []
-    for i in range(0, len(torrent["info"]["pieces"]), 20):
-        hashes.append(torrent["info"]["pieces"][i : i + 20].hex())
-    return hashes
-
-
-def get_tracker_info(torrent):
-    tracker_url = torrent["announce"].decode()
-
-    params = {
-        "info_hash": torrent["info_hash"],
-        "peer_id": "codecrafter-12345678",
-        "port": 6881,
-        "uploaded": 0,
-        "downloaded": 0,
-        "left": torrent["info"]["length"],
-        "compact": 1,
-    }
-    response = requests.get(tracker_url, params)
-    return bencode.decode(response.content)
-
-
-def calculate_piece_length(torrent, piece_index):
-    piece_hashes = get_piece_hashes(torrent)
-    if piece_index == len(piece_hashes) - 1:
-        # Calculate remainig length of last piece
-        return torrent["info"]["length"] - (
-            torrent["info"]["piece length"] * piece_index
-        )
-    else:
-        return torrent["info"]["piece length"]
 
 
 def main():
@@ -147,32 +85,43 @@ def main():
         bittorrent = Bittorrent()
         bittorrent.connect(*peers[0])
         bittorrent.handshake(torrent)
+        bittorrent.init_peer_communication()
 
-        # Request piece from peer
-        bittorrent.wait_for_reply(BITFIELD)
-        bittorrent.send(INTERESTED)
-        bittorrent.wait_for_reply(UNCHOKE)
+        # Download piece
+        data = bittorrent.download_piece(torrent, piece_index)
 
-        piece_length = calculate_piece_length(torrent, piece_index)
-        block_count = piece_length // BLOCK_LENGTH
-        last_block_length = piece_length % BLOCK_LENGTH
-
-        data = b""
-        for index in range(block_count):
-            data += bittorrent.download_block(
-                index=piece_index,
-                begin=index * BLOCK_LENGTH,
-                length=BLOCK_LENGTH,
-            )
-        if last_block_length > 0:
-            data += bittorrent.download_block(
-                index=piece_index,
-                begin=block_count * BLOCK_LENGTH,
-                length=last_block_length,
-            )
-
+        print(f"Piece {piece_index} successfully donloaded")
+        # Write piece to file
         with open(target_file, "wb") as f:
             f.write(data)
+
+    elif command == "download":
+        target_file = sys.argv[3]
+        torrent_file = sys.argv[4]
+
+        # Gather info
+        torrent = parse_torrent(torrent_file)
+        tracker = get_tracker_info(torrent)
+        peers = parse_peers(tracker)
+
+        # Establish connection
+        bittorrent = Bittorrent()
+        bittorrent.connect(*peers[2])
+        bittorrent.handshake(torrent)
+        bittorrent.init_peer_communication()
+
+        piece_hashes = get_piece_hashes(torrent)
+
+        print("Pieces to download:", len(piece_hashes))
+        data = []
+        for piece_index in range(0, len(piece_hashes)):
+            print("Downloading piece:", piece_index)
+            data.append(bittorrent.download_piece(torrent, piece_index))
+
+        # Write to file
+        with open(target_file, "wb") as f:
+            for piece in data:
+                f.write(piece)
 
     else:
         raise NotImplementedError(f"Unknown command {command}")
